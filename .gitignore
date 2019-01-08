@@ -27,3 +27,4 @@ sysinfo.txt
 *.blend1*
 *.blend2
 Logs/
+*.unitypackage
