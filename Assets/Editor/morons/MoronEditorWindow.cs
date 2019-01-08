@@ -7,27 +7,36 @@ using UnityEditor;
 
 namespace Gridsnap.Morons
 {
-	public class MoronEditorWindow : EditorWindow
+	public partial class MoronEditorWindow : EditorWindow
 	{
 		protected static readonly Color INTENT_COLOR = new Color(.9f, .38f, 0f);
 		protected static readonly Color CHOICE_COLOR = new Color(0f, .38f, .9f);
-		protected static readonly Color INTENT_ROOT_COLOR = new Color(.9f, .20f, 0f);
+		protected static readonly Color INTENT_ROOT_COLOR = new Color(.23f, .77f, .13f);
 
 		protected static readonly Color YES_TRANSITION_COLOR = new Color(.28f, 1f, .42f);
 		protected static readonly Color NO_TRANSITION_COLOR = new Color(1f, .28f, .28f);
 		protected static readonly Color NEXT_TRANSITION_COLOR = new Color(1f, .48f, .28f);
 		protected static readonly Color SELECTED_TRANSITION_COLOR = new Color(.83f, .28f, 1f);
 
-		protected static readonly Color NODE_BACKGROUND_COLOR = new Color(.9f, .9f, .9f);
-
-		protected static MoronGraph graph;
-
-		protected MoronEditorInput input;
+		protected static readonly Color NODE_BACKGROUND_COLOR = Color.white;
+		protected static readonly Color INSPECTOR_BACKGROUND_COLOR = new Color(.76f, .76f, .76f);
 		
-		protected GUIStyle labelStyle;
-		protected Texture2D nodeGradient;
+		protected const int NODE_FLASHTIME = 300;
+		protected const float NAME_WIDTH = 90f;
 
-		protected Vector2 scrollPosition;
+		// statemap stuff
+		protected Dictionary<String, Type> definitionTypes;
+		protected String[] definitionTypeNames;
+		protected String definitionName;
+		protected int selectedDefinitionIndex;
+
+		protected float statemapInspectorWidth = 225f;
+
+		// currently edited graph
+		protected static MoronGraph graph;
+		
+		// ingame current selected gameObject guid map
+		Dictionary<String, MoronIONode> guidMap;
 
 		[MenuItem("Window/Morons")]
 		public static void Init()
@@ -40,12 +49,17 @@ namespace Gridsnap.Morons
 			this.titleContent = new GUIContent("Morons");
 			this.autoRepaintOnSceneChange = false;
 			this.wantsMouseMove = true;
-
-			input = new MoronEditorInput();
-			input.selectionCallback = findNodeForPosition;
-			input.edgeSelectionCallback = findEdgeForPosition;
-			input.rightClickCallback = rightClick;
-			input.transitionCallback = makeTransition;			
+			
+			definitionTypes = new Dictionary<String, Type>
+			{
+				{"bool", typeof(bool)},
+				{"int", typeof(int)},
+				{"float", typeof(float)},
+				{"string", typeof(String)},
+				{"Vector3", typeof(Vector3)},
+				{"GameObject", typeof(GameObject)}
+			};
+			definitionTypeNames = definitionTypes.Keys.ToArray();	
 		}
 
 		[UnityEditor.Callbacks.OnOpenAsset(1)]
@@ -63,13 +77,31 @@ namespace Gridsnap.Morons
 			MoronEditorWindow.graph = graph;
 
 			EditorWindow.GetWindow<MoronEditorWindow>().Show();
-			EditorWindow.GetWindow<MoronStatemapEditorWindow>().Show();
 			return true;
+		}
+
+		public void OnSelectionChange()
+		{
+			MoronThinker thinker;
+
+			if(!Application.isPlaying)
+				return;
+			
+			if(Selection.activeGameObject == null)
+				return;
+			
+			thinker = Selection.activeGameObject.GetComponent<MoronThinker>();
+			if(thinker == null)
+				return;
+			
+			graph = thinker.logic;
+			buildGuidMap(thinker);
+			Repaint();
 		}
 
 		public void OnEnable()
 		{
-			input.reset();
+			reset();
 		}
 
 		public MoronGraph getGraph()
@@ -82,7 +114,19 @@ namespace Gridsnap.Morons
 			if(graph == null)
 				return;
 
-			input.updateInput(Event.current);
+			updateInput(Event.current);
+			
+			switch(Event.current.type)
+			{
+				case EventType.MouseDrag:
+				case EventType.MouseMove:
+					if(!m0)
+						return;
+					break;
+				
+				// TODO: patched-redraw based on focused control and keyboard event
+			}
+
 			redraw();
 		}
 
@@ -97,9 +141,11 @@ namespace Gridsnap.Morons
 			clear(Color.gray);
 
 			realPosition = new Rect(0f, 0f, position.width, position.height);
-			input.scrollPosition = GUI.BeginScrollView(realPosition, input.scrollPosition, findMaxArea());
+
+			// draw main area
+			scrollPosition = GUI.BeginScrollView(realPosition, scrollPosition, findMaxArea());
 			
-			if(input.transitionLine)
+			if(transitionLine && selected != null)
 				drawTransitionLine();
 			
 			foreach(Pair<int, int> edge in graph.edges)
@@ -109,6 +155,20 @@ namespace Gridsnap.Morons
 				drawNode(node);
 
 			GUI.EndScrollView();
+
+			// draw statemap definitions
+			GUI.BeginGroup(new Rect(0f, 0f, statemapInspectorWidth, realPosition.height));
+
+			clear(INSPECTOR_BACKGROUND_COLOR);
+			GUI.color = Color.white;
+			GUI.backgroundColor = Color.white;
+			GUI.contentColor = Color.white;
+
+			drawStatemap();
+			drawStaticStatemapControls();
+			drawNodeComments();
+
+			GUI.EndGroup();
 		}
 
 		protected void clear(Color clearColor)
@@ -131,8 +191,11 @@ namespace Gridsnap.Morons
 		protected void drawBody(MoronIONode node, Rect nodeRect)
 		{
 			MoronThinker thinker;
+			MoronIONode thinkerNode;
+			TimeSpan age;
 			Rect borderRect;
-			
+			Color desiredColor;
+
 			// border
 			borderRect = nodeRect;
 			borderRect.x -= 1;
@@ -140,7 +203,7 @@ namespace Gridsnap.Morons
 			borderRect.width += 2;
 			borderRect.height += 2;
 
-			if(node == input.selected)
+			if(node == selected)
 				GUI.color = Color.yellow;
 			else
 				GUI.color = Color.black;
@@ -151,20 +214,35 @@ namespace Gridsnap.Morons
 			if(node is MoronIntent)
 			{
 				if(node == graph.nodes[0])
-					GUI.color = INTENT_ROOT_COLOR;
+					desiredColor = INTENT_ROOT_COLOR;
 				else
-					GUI.color = INTENT_COLOR;
+					desiredColor = INTENT_COLOR;
 			}
-			if(node is MoronChoice)
-				GUI.color = CHOICE_COLOR;
+			else
+				desiredColor = CHOICE_COLOR;
 
 			if(Application.isPlaying && Selection.gameObjects.Length > 0)
 			{
 				thinker = Selection.gameObjects[0].GetComponent<MoronThinker>();
-				if(thinker != null && thinker.getCurrentNode().guid == node.guid)
-					GUI.color = Color.white;
+				if(thinker != null)
+				{
+					if(thinker.getCurrentNode().guid == node.guid)
+						desiredColor = Color.white;
+					else
+					{
+						if(guidMap.ContainsKey(node.guid))
+						{
+							thinkerNode = guidMap[node.guid];
+
+							age = DateTime.Now.AddMilliseconds(-NODE_FLASHTIME).Subtract(thinkerNode.lastActiveTime);
+							if(age.TotalMilliseconds < NODE_FLASHTIME)
+								desiredColor = Color.LerpUnclamped(Color.white, desiredColor, (float)age.TotalMilliseconds / (float)NODE_FLASHTIME);
+						}
+					}
+				} 
 			}
 
+			GUI.color = desiredColor;
 			GUI.DrawTexture(nodeRect, EditorGUIUtility.whiteTexture);
 		}
 
@@ -193,7 +271,7 @@ namespace Gridsnap.Morons
 
 		protected void drawFields(MoronIONode node, Rect nodeRect)
 		{
-			System.Object value;
+			System.Object value, original;
 			Rect current, label;
 			float labelWidth;
 
@@ -214,9 +292,13 @@ namespace Gridsnap.Morons
 				current.x = nodeRect.x + labelWidth;
 				current.width = nodeRect.width - labelWidth - 2;
 				
-				value = EditorPropertyHelper.propertyField(current, label, field.Name, field.FieldType, node.getManualJoist(field.Name));
+				original = node.getManualJoist(field.Name);
+				value = EditorPropertyHelper.propertyField(current, label, field.Name, field.FieldType, original);
 				node.setManualJoist(field.Name, value);
 				
+				if(value != original)
+					EditorUtility.SetDirty(graph);
+
 				current.y += 20;
 			}
 
@@ -229,7 +311,7 @@ namespace Gridsnap.Morons
 			IEnumerable<FieldInfo> fields;
 			String[] matchingArray;
 			float labelWidth;
-			int index;
+			int index, original, adj;
 
 			fields = node.getFieldsWithAttribute<T>();
 			if(fields.Count() <= 0)
@@ -254,14 +336,19 @@ namespace Gridsnap.Morons
 				EditorGUI.LabelField(label, field.Name);
 
 				matchingArray = graph.statemapDefinition.getFieldsForType(field.FieldType).Select(k => k.name).ToArray();
-				index = Array.IndexOf(matchingArray, getCall(field.Name));
-				if(index < 0)
-					index = 0;
+				original = Array.IndexOf(matchingArray, getCall(field.Name));
 
-				index = EditorGUI.Popup(current, index, matchingArray);
+				adj = original;
+				if(original < 0)
+					adj = 0;
+
+				index = EditorGUI.Popup(current, adj, matchingArray);
 				
-				if(index > 0 && index < matchingArray.Length)
+				if(index >= 0 && index < matchingArray.Length && index != original)
+				{
 					setCall(field.Name, matchingArray[index]);
+					EditorUtility.SetDirty(graph);
+				}
 				
 				current.y += 20;
 			}
@@ -300,7 +387,7 @@ namespace Gridsnap.Morons
 			}
 
 			// finally, if this is the selected edge, color it purple.
-			if(input.selectedEdge >= 0 && indices.Equals(graph.edges[input.selectedEdge]))
+			if(selectedEdge >= 0 && indices.Equals(graph.edges[selectedEdge]))
 				Handles.color = SELECTED_TRANSITION_COLOR;
 
 			from = graph.nodes[indices.key].position;
@@ -316,7 +403,7 @@ namespace Gridsnap.Morons
 		protected void drawTransitionLine()
 		{
 			GUI.color = Color.white;
-			Handles.DrawLine(input.selected.position, Event.current.mousePosition);
+			Handles.DrawLine(selected.position, Event.current.mousePosition);
 		}
 
 		protected void drawArrow(Vector2 position, Quaternion rotation, float width, float length)
@@ -330,24 +417,90 @@ namespace Gridsnap.Morons
 			Handles.DrawAAConvexPolygon(a, b, c);
 		}
 
+		protected void drawStatemap()
+		{
+			System.Object value;
+
+			foreach(StatemapField field in graph.statemapDefinition.definitions)
+			{
+				if(!field.editable)
+				{
+					EditorPropertyHelper.readonlyField(field.name, NAME_WIDTH);
+					continue;
+				}
+
+				value = EditorPropertyHelper.propertyField(field.name, NAME_WIDTH, field.type, field.value, statemapInspectorWidth - NAME_WIDTH - 10f);
+
+				if(!System.Object.Equals(value, field.value))
+				{
+					field.set(field.type, value);
+					EditorUtility.SetDirty(graph);
+				}
+			}
+		}
+
+		protected void drawStaticStatemapControls()
+		{
+			EditorGUILayout.BeginHorizontal();
+
+			definitionName = EditorGUILayout.TextField(definitionName, GUILayout.Width(NAME_WIDTH));
+			selectedDefinitionIndex = EditorGUILayout.Popup(selectedDefinitionIndex, definitionTypeNames, GUILayout.Width(NAME_WIDTH));
+
+			if(GUILayout.Button("+", EditorStyles.miniButton, GUILayout.Width(20), GUILayout.Height(15)))
+				createDefinition();
+
+			EditorGUILayout.EndHorizontal();
+		}
+
+		protected void drawNodeComments()
+		{
+			if(selected == null)
+				return;
+			
+			try
+			{
+				EditorGUILayout.LabelField("Comments");
+				selected.comment = EditorGUILayout.TextArea(selected.comment, GUILayout.Width(statemapInspectorWidth - 10), GUILayout.MinHeight(50));
+			}
+			catch(ArgumentException e)
+			{
+				// suppress. I know it's hacky.
+			}
+		}
+
+		protected void createDefinition()
+		{
+			Type t;
+			System.Object value;
+
+			t = definitionTypes[definitionTypeNames[selectedDefinitionIndex]];
+
+			if(t.IsValueType)
+				value = (System.Object)Activator.CreateInstance(t);
+			else
+				value = null;
+
+			graph.statemapDefinition.set(definitionName, t, value);
+			EditorUtility.SetDirty(graph);
+		}
+
 		protected void startTransition(System.Object userdata)
 		{
-			input.transitionLine = true;
-			input.transitionReplacement = (MoronTransitionCondition)userdata;
+			transitionLine = true;
+			transitionReplacement = (MoronTransitionCondition)userdata;
 		}
 
 		protected void deleteTransition(System.Object userdata)
 		{
-			graph.edges.RemoveAt(input.selectedEdge);
-			input.reset();
+			graph.edges.RemoveAt(selectedEdge);
+			reset();
+			EditorUtility.SetDirty(graph);
 		}
 
 		protected void toggleInterrupting(System.Object userdata)
 		{
-			MoronChoice selected;
-
-			selected = ((MoronChoice)input.selected);
 			selected.interruptsIntent = !selected.interruptsIntent;
+			EditorUtility.SetDirty(graph);
 		}
 
 		protected void setRootIntent(System.Object userdata)
@@ -356,9 +509,9 @@ namespace Gridsnap.Morons
 			int nodeIndex;
 
 			// swap
-			nodeIndex = graph.nodes.IndexOf(input.selected);
+			nodeIndex = graph.nodes.IndexOf(selected);
 			graph.nodes[nodeIndex] = graph.nodes[0];
-			graph.nodes[0] = input.selected;
+			graph.nodes[0] = selected;
 
 			// modify edges that referenced either one
 			for(int i = 0; i < graph.edges.Count; i++)
@@ -379,6 +532,8 @@ namespace Gridsnap.Morons
 				
 				graph.edges[i] = edge;
 			}
+
+			EditorUtility.SetDirty(graph);
 		}
 
 		protected void deleteNode(System.Object userdata)
@@ -386,8 +541,8 @@ namespace Gridsnap.Morons
 			Pair<int, int> modifiedPair, originalPair;
 			int index, from, to;
 
-			index = graph.nodes.IndexOf(input.selected);
-			graph.nodes.Remove(input.selected);
+			index = graph.nodes.IndexOf(selected);
+			graph.nodes.Remove(selected);
 
 			// make sure edge indices are properly updated/removed
 			graph.edges.RemoveAll(e => e.key == index || e.value == index);
@@ -406,6 +561,8 @@ namespace Gridsnap.Morons
 				modifiedPair = new Pair<int, int>(from, to);
 				graph.edges[i] = modifiedPair;
 			}
+
+			EditorUtility.SetDirty(graph);
 		}
 
 		protected MoronIONode findNodeForPosition(Vector2 position)
@@ -434,56 +591,82 @@ namespace Gridsnap.Morons
 			return -1;
 		}
 
+		protected bool checkStatemapWidth(float x)
+		{
+			return x > statemapInspectorWidth;
+		}
+
 		protected void rightClick()
+		{
+			if(selected == null)
+			{				
+				if(selectedEdge < 0)
+				{
+					showAddMenu();
+					return;
+				}
+
+				showTransitionMenu();
+				return;
+			}
+			
+			populateNodeRightClick();
+		}
+
+		protected void showAddMenu()
 		{
 			GenericMenu menu;
 			
 			menu  = new GenericMenu();
 
-			if(input.selected == null)
-			{				
-				if(input.selectedEdge < 0)
-				{
-					makeTypeCreators(typeof(MoronIntent), menu, "Create Intent/");
-					makeTypeCreators(typeof(MoronChoice), menu, "Create Choice/");
-				}
-				else
-					menu.AddItem(new GUIContent("Delete Transition"), false, deleteTransition, null);
-			}
-			else
-				populateNodeRightClick(menu);
-			
+			makeTypeCreators(typeof(MoronIntent), menu, "Create Intent/");
+			makeTypeCreators(typeof(MoronChoice), menu, "Create Choice/");
+
 			menu.ShowAsContext();
 		}
 
-		protected void populateNodeRightClick(GenericMenu menu)
+		protected void showTransitionMenu()
 		{
-			if(input.selected is MoronIntent)
+			GenericMenu menu;
+			
+			menu  = new GenericMenu();
+			menu.AddItem(new GUIContent("Delete Transition"), false, deleteTransition, null);
+			menu.ShowAsContext();
+		}
+
+		protected void populateNodeRightClick()
+		{
+			GenericMenu menu;
+			
+			menu  = new GenericMenu();
+
+			if(selected is MoronIntent)
 			{
 				menu.AddItem(new GUIContent("Make Transition"), false, startTransition, MoronTransitionCondition.INTENT);
 
-				if(graph.nodes[0] != input.selected)
+				if(graph.nodes[0] != selected)
 					menu.AddItem(new GUIContent("Set as Root"), false, setRootIntent, null);
 				else
 					menu.AddDisabledItem(new GUIContent("Set as Root"));
 			}
 
-			if(input.selected is MoronChoice)
+			if(selected is MoronChoice)
 			{
-				if(((MoronChoice)input.selected).interruptsIntent)
-					menu.AddItem(new GUIContent("Set as non-interrupting"), false, toggleInterrupting, null);
-				else
-					menu.AddItem(new GUIContent("Set as interrupting"), false, toggleInterrupting, null);
-
 				menu.AddItem(new GUIContent("Set 'yes' Transition"), false, startTransition, MoronTransitionCondition.YES);	
 
-				if(findNeighborsFrom(graph.nodes.IndexOf(input.selected)).Count() > 0)
+				if(findNeighborsFrom(graph.nodes.IndexOf(selected)).Count() > 0)
 					menu.AddItem(new GUIContent("Set 'no' Transition"), false, startTransition, MoronTransitionCondition.NO);	
 				else
 					menu.AddDisabledItem(new GUIContent("Set 'no' Transition"));	
+
+				if(((MoronChoice)selected).interruptsIntent)
+					menu.AddItem(new GUIContent("Set as non-interrupting"), false, toggleInterrupting, null);
+				else
+					menu.AddItem(new GUIContent("Set as interrupting"), false, toggleInterrupting, null);
 			}
 			
 			menu.AddItem(new GUIContent("Delete"), false, deleteNode, null);
+			menu.ShowAsContext();
 		}
 
 		protected void makeTransition(MoronIONode from, MoronIONode to)
@@ -497,7 +680,7 @@ namespace Gridsnap.Morons
 			metaIndex = graph.nodes.IndexOf(from);
 			previousEdgeMetaIndex = -1;
 
-			switch(input.transitionReplacement)
+			switch(transitionReplacement)
 			{
 				case MoronTransitionCondition.INTENT:
 					
@@ -543,6 +726,25 @@ namespace Gridsnap.Morons
 				graph.edges.Add(edge);
 			else
 				graph.edges.Insert(previousEdgeMetaIndex, edge);
+
+			EditorUtility.SetDirty(graph);
+		}
+
+		protected void deleteSelected()
+		{
+			EditorUtility.SetDirty(graph);
+
+			if(selectedEdge >= 0)
+			{
+				deleteTransition(null);
+				return;
+			}
+
+			if(selected != null)
+			{
+				deleteNode(null);
+				return;
+			}
 		}
 
 		protected Rect makeNodeRect(MoronIONode node)
@@ -571,18 +773,45 @@ namespace Gridsnap.Morons
 		protected void makeTypeCreators(Type t, GenericMenu menu, String prefix)
 		{
 			IEnumerable<Type> matchingTypes;
-			String name;
+			MoronPathAttribute relativePath;
+			List<Pair<Type, String>> paths;
+			IEnumerable<Pair<Type, String>> orderedPaths;
+			String name, path;
 
+			paths = new List<Pair<Type, String>>();
+
+			// create a set of all the types and paths we want
 			matchingTypes = 
 				AppDomain.CurrentDomain.GetAssemblies()
 				.SelectMany(s => s.GetTypes())
-				.Where(p => t.IsAssignableFrom(p) && p.IsClass && p != t);
+				.Where(p => t.IsAssignableFrom(p) && p.IsClass && p != t)
+				.OrderBy(ty => ty.Name);
 			
 			foreach(Type matched in matchingTypes)
 			{
 				name = findNodeTypeName(matched);
-				menu.AddItem(new GUIContent(prefix + name), false, (_) => createNode(matched), null);
+
+				path = prefix;
+
+				relativePath = matched.GetCustomAttributes(true)
+					.Where(a => a.GetType() == typeof(MoronPathAttribute))
+					.Cast<MoronPathAttribute>()
+					.FirstOrDefault();
+
+				if(relativePath != null)
+					path += relativePath.path;
+				
+				path += name;
+				paths.Add(new Pair<Type, String>(matched, path));
 			}
+
+			// organize and create menu items
+			orderedPaths = paths
+				.OrderByDescending(p => p.value.Length - p.value.Replace("/", "").Length)
+				.ThenBy(p => p.value);
+
+			foreach(Pair<Type, String> pair in orderedPaths)
+				menu.AddItem(new GUIContent(pair.value), false, (_) => createNode(pair.key), null);
 		}
 
 		protected void createNode(Type t)
@@ -590,8 +819,10 @@ namespace Gridsnap.Morons
 			MoronIONode node;
 
 			node = (MoronIONode)Activator.CreateInstance(t);
-			node.position = input.lastClicked + input.scrollPosition;
+			node.position = lastClicked + scrollPosition;
 			graph.nodes.Add(node);
+
+			EditorUtility.SetDirty(graph);
 		}
 
 		protected Rect findMaxArea()
@@ -621,6 +852,36 @@ namespace Gridsnap.Morons
 			for(int i = 0; i < graph.edges.Count; i++)
 				if(graph.edges[i].key == index)
 					yield return i;
+		}
+
+		protected void buildGuidMap(MoronThinker thinker)
+		{
+			List<MoronIONode> visited, horizon;
+			MoronIONode node;
+
+			horizon = new List<MoronIONode>();
+			visited = new List<MoronIONode>();
+
+			horizon.Add(thinker.getCurrentNode());
+			guidMap = new Dictionary<String, MoronIONode>();
+
+			while(horizon.Count > 0)
+			{
+				node = horizon[0];
+				horizon.RemoveAt(0);
+				visited.Add(node);
+
+				guidMap[node.guid] = node;
+
+				foreach(GraphEdge edge in node.edges)
+					if(!visited.Contains((MoronIONode)edge.to))
+						horizon.Add((MoronIONode)edge.to);
+			}
+		}
+
+		protected void markDirty()
+		{
+			EditorUtility.SetDirty(graph);
 		}
 	}
 }

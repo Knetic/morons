@@ -4,19 +4,9 @@ using UnityEditor;
 
 namespace Gridsnap.Morons
 {
-	public delegate MoronIONode MoronSelectionRequestEvent(Vector2 position);
-	public delegate int MoronEdgeSelectionRequestEvent(Vector2 position);
-	public delegate void MoronRightClick();
-	public delegate void MoronTransition(MoronIONode from, MoronIONode to);
-
-	public class MoronEditorInput
+	public partial class MoronEditorWindow : EditorWindow
 	{
-		public const float GRIDSNAP_SIZE = 20;
-
-		public MoronSelectionRequestEvent selectionCallback;
-		public MoronRightClick rightClickCallback;
-		public MoronTransition transitionCallback;
-		public MoronEdgeSelectionRequestEvent edgeSelectionCallback;
+		public const float GRIDSNAP_SIZE = 10;
 
 		public MoronIONode selected;
 		public int selectedEdge;
@@ -26,14 +16,9 @@ namespace Gridsnap.Morons
 
 		public MoronTransitionCondition transitionReplacement;
 		public bool transitionLine;
+		public bool m0;
 
 		protected Vector2 selectionOffset;
-		protected bool m0;
-
-		public MoronEditorInput()
-		{
-			reset();
-		}
 
 		public void reset()
 		{
@@ -54,21 +39,24 @@ namespace Gridsnap.Morons
 			{
 				case EventType.MouseDown:
 
-					lastClicked = current.mousePosition;
+					if(!checkStatemapWidth(position.x))
+						break;
+
+					lastClicked = position;
 
 					switch(current.button)
 					{
 						case 0:
 
 							selectedEdge = -1;
-							currentNode = selectionCallback(position);
+							currentNode = findNodeForPosition(position);
 
 							if(transitionLine)
 							{
 								m0 = false;
 
 								if(currentNode != null)
-									transitionCallback(selected, currentNode);
+									makeTransition(selected, currentNode);
 								break;
 							}
 
@@ -81,18 +69,19 @@ namespace Gridsnap.Morons
 							}
 							else
 							{
+								deselectNode();
 								selectionOffset = Vector3.zero;
-								selectedEdge = edgeSelectionCallback(position);
+								selectedEdge = findEdgeForPosition(position);
 							}
 							
 							break;
 						case 1:
 
-							selected = selectionCallback(position);
+							selected = findNodeForPosition(position);
 							if(selected == null)
-								selectedEdge = edgeSelectionCallback(position);
+								selectedEdge = findEdgeForPosition(position);
 
-							rightClickCallback();
+							rightClick();
 							break;
 					}
 
@@ -107,9 +96,13 @@ namespace Gridsnap.Morons
 					if(current.button != 0)
 						break;
 					
-					if(selectionCallback(position) != selected)
-						selected = null;
 					m0 = false;
+
+					if(!checkStatemapWidth(position.x))
+						break;
+					
+					if(findNodeForPosition(position) != selected)
+						deselectNode();
 					break;
 				
 				case EventType.MouseDrag:
@@ -119,8 +112,49 @@ namespace Gridsnap.Morons
 						break;
 					
 					selected.position = VectorHandling.gridsnap(lastDragged + selectionOffset, GRIDSNAP_SIZE);
+					markDirty();					
+					break;
+				
+				case EventType.KeyDown:
+
+					if(!checkStatemapWidth(current.mousePosition.x))
+						break;
+
+					switch(current.keyCode)
+					{
+						case KeyCode.X:
+						case KeyCode.Delete:
+
+							deleteSelected();					
+							break;
+						case KeyCode.T:
+
+							MoronTransitionCondition condition;
+
+							if(selected == null || transitionLine)
+								break;
+								
+							condition = MoronTransitionCondition.INTENT;
+
+							if(selected is MoronChoice)
+								condition = MoronTransitionCondition.YES;
+
+							startTransition(condition);
+							break;
+						
+						case KeyCode.A:
+
+							showAddMenu();
+							break;
+					}
 					break;
 			}
+		}
+
+		protected void deselectNode()
+		{
+			selected = null;
+			GUI.FocusControl("");
 		}
 	}
 }

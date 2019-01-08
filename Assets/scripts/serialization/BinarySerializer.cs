@@ -11,12 +11,10 @@ namespace Gridsnap.Morons
 	{
 		public static void serializeSimpleObject(BinaryWriter writer, System.Object value)
 		{
-			Type type;
-
-			if(value == null)
-				return;
-			
-			type = value.GetType();
+			serializeSimpleObject(writer, value, value.GetType());
+		}
+		public static void serializeSimpleObject(BinaryWriter writer, System.Object value, Type type)
+		{
 			writer.Write(type.FullName);
 			
 			if(type == typeof(bool))
@@ -32,7 +30,26 @@ namespace Gridsnap.Morons
 				writeVector3(writer, (Vector3)value);
 
 			if(type == typeof(String))
-				writer.Write((String)value);
+				if(String.IsNullOrEmpty((String)value))
+					writer.Write("");
+				else
+					writer.Write((String)value);
+			
+			// You can't actually serialize a GameObject, the only way it can be stored in is the scene.
+			// Therefore we actually store the name of an invisible child of the given GameObject which has a specific component.
+			if(type == typeof(GameObject) || type == typeof(IdentifiedGameObject))
+			{
+				IdentifiedGameObject actualValue;
+
+				if(System.Object.Equals(value, null))
+				{
+					writer.Write("");
+					return;
+				}
+
+				actualValue = ((IdentifiedGameObject)value);
+				writer.Write(actualValue.guid);
+			}
 		}
 
 		public static System.Object deserializeSimpleObject(BinaryReader reader)
@@ -55,6 +72,10 @@ namespace Gridsnap.Morons
 
 			if(type == typeof(String))
 				return reader.ReadString();
+			
+			// GameObjects can't be "found" at deserialization-time, so we return the GUID of the object in the scene, and it will be resolved later.
+			if(type == typeof(GameObject) || type == typeof(IdentifiedGameObject))
+				return new IdentifiedGameObject(reader.ReadString(), null);
 
 			return null;
 		}

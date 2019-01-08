@@ -15,6 +15,11 @@ namespace Gridsnap.Morons
 	{
 		protected abstract bool evaluate();
 
+		public override sealed void init()
+		{
+			base.init();
+		}
+
 		public sealed override GraphEdge update()
 		{
 			GraphEdge transition;
@@ -48,9 +53,13 @@ namespace Gridsnap.Morons
 
 		// "nearby" isn't a concept that intents care about.
 		public sealed override void notifyNearby()
-		{}
+		{
+			base.notifyNearby();
+		}
 		public sealed override void notifyNotNearby()
-		{}
+		{
+			base.notifyNotNearby();
+		}
 
 		protected GraphEdge getTransitionForInterruptors(bool areInterruptor)
 		{

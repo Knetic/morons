@@ -24,6 +24,7 @@ namespace Gridsnap.Morons
 			{
 				writer.Write(node.GetType().FullName);
 				writer.Write(node.guid);
+				writer.Write(node.comment);
 				BinarySerializer.writeVector3(writer, node.position);
 				writer.Write(node.interruptsIntent);
 
@@ -68,6 +69,7 @@ namespace Gridsnap.Morons
 				t = BinarySerializer.findType(reader.ReadString());
 				node = (MoronIONode)Activator.CreateInstance(t);
 				node.guid = reader.ReadString();
+				node.comment = reader.ReadString();
 				node.position = BinarySerializer.readVector3(reader);
 				node.interruptsIntent = reader.ReadBoolean();
 

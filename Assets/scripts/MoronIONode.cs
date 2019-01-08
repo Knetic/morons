@@ -19,12 +19,15 @@ namespace Gridsnap.Morons
 		[NonSerialized]
 		public String guid = System.Guid.NewGuid().ToString();
 
+		[NonSerialized]
+		public String comment = String.Empty;
+
 		/// <summary>
 		///		If true, this node will be evaluated even if the current Intent isn't finished.
 		///		Only has a real effect on Choices, though other types may need it in the future.
 		/// </summary>
 		[NonSerialized]
-		public bool interruptsIntent;
+		public bool interruptsIntent = true;
 
 		/// <summary>
 		///		Joists map an IONode field name to a designer-defined statemap variable name.
@@ -53,6 +56,12 @@ namespace Gridsnap.Morons
 		private Dictionary<String, FieldInfo> statemapRead, statemapWrite;
 
 		/// <summary>
+		///		Purely to flash in the editor window when this was passed through.
+		/// </summary>
+		[NonSerialized]
+		public DateTime lastActiveTime;
+
+		/// <summary>
 		///		Executed whatever logic needs to happen, and return the edge to the next IONode that should be activated.
 		///		If null is returned (which is not unusual) then no state transition will occur.
 		/// </summary>
@@ -74,9 +83,9 @@ namespace Gridsnap.Morons
 			ourType = GetType();
 
 			foreach(Pair<String, String> joist in readJoists)
-				statemapRead[joist.value] = ourType.GetField(joist.key);
+				statemapRead.Add(joist.value, ourType.GetField(joist.key));
 			foreach(Pair<String, String> joist in writeJoists)
-				statemapWrite[joist.value] = ourType.GetField(joist.key);
+				statemapWrite.Add(joist.value, ourType.GetField(joist.key));
 
 			foreach(Pair<String, System.Object> joist in manualJoists)
 				ourType.GetField(joist.key).SetValue(this, joist.value);
@@ -84,18 +93,20 @@ namespace Gridsnap.Morons
 
 		public virtual void activate()
 		{
-			foreach(String key in statemapRead.Keys)
-				statemapRead[key].SetValue(this, thinker.statemap[key]);
+			updateReadFields();
 		}
 
 		public virtual void deactivate()
 		{
-			foreach(String key in statemapWrite.Keys)
-				thinker.statemap[key] = statemapWrite[key].GetValue(this);
+			lastActiveTime = DateTime.Now;
+			updateWriteFields();
 		}
 
 		public virtual void notifyNearby()
-		{}
+		{
+			updateReadFields();
+		}
+
 		public virtual void notifyNotNearby()
 		{}
 
@@ -184,6 +195,32 @@ namespace Gridsnap.Morons
 		{
 			joists.RemoveAll(j => j.key == key);
 			joists.Add(new Pair<String, T>(key, value));
+		}
+
+		public void updateReadFields()
+		{
+			foreach(String key in statemapRead.Keys)
+				statemapRead[key].SetValue(this, thinker.getStateValue(key));
+		}
+
+		public void updateWriteFields()
+		{
+			foreach(String statemapKey in statemapWrite.Keys)
+				thinker.setStateValue(statemapKey, statemapWrite[statemapKey].GetValue(this));
+		}
+
+		protected void setStatemapValue(String writeJoistName, System.Object value)
+		{
+			Pair<String, String> joist;
+
+			joist = writeJoists
+				.Where(j => j.key.Equals(writeJoistName))
+				.FirstOrDefault();
+
+			if(String.IsNullOrEmpty(joist.value))
+				return;
+			
+			thinker.setStateValue(joist.value, value);
 		}
 	}
 }

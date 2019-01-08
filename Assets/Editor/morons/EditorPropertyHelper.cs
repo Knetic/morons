@@ -43,6 +43,9 @@ namespace Gridsnap.Morons
 
 		public static System.Object propertyField(String label, float labelWidth, Type type, System.Object value, float width)
 		{
+			IdentifiedGameObject stored, identified;
+			GameObject obj;
+
 			EditorGUILayout.BeginHorizontal();
 
 			if(type == null)
@@ -50,27 +53,52 @@ namespace Gridsnap.Morons
 
 			try
 			{
-				EditorGUILayout.LabelField(label, GUILayout.MaxWidth(labelWidth));
+				EditorGUILayout.LabelField(label, GUILayout.Width(labelWidth));
 				
 				if(type == typeof(bool))
-					return EditorGUILayout.Toggle((bool)value);
+					return EditorGUILayout.Toggle((bool)value, GUILayout.Width(width));
 				if(type == typeof(int))
-					return EditorGUILayout.IntField((int)value);
+					return EditorGUILayout.IntField((int)value, GUILayout.Width(width));
 				if(type == typeof(float))
-					return EditorGUILayout.FloatField((float)value);
+					return EditorGUILayout.FloatField((float)value, GUILayout.Width(width));
 				if(type == typeof(String))
-					return EditorGUILayout.TextField((String)value);
+					return EditorGUILayout.TextField((String)value, GUILayout.Width(width));
 				if(type == typeof(Vector3))
-					return EditorGUILayout.Vector3Field("", (Vector3)value, GUILayout.MaxWidth(width));
-				if(type == typeof(GameObject))
-					return EditorGUILayout.ObjectField((UnityEngine.GameObject)value, type, true);
-				
+					return EditorGUILayout.Vector3Field("", (Vector3)value, GUILayout.Width(width));
+				if(type == typeof(IdentifiedGameObject))
+				{
+					stored = (IdentifiedGameObject)value;					
+						
+					// empty (never-assigned) guid?
+					if(stored == null || String.IsNullOrEmpty(stored.guid))
+					{
+						obj = (GameObject)EditorGUILayout.ObjectField(null, typeof(GameObject), true, GUILayout.Width(width));
+						if(stored == null && obj != null)
+							return new IdentifiedGameObject(null, obj);
+
+						if(stored != null && obj != stored.gameObject)
+							return new IdentifiedGameObject(null, obj);
+						
+						return stored;
+					}
+
+					identified = StatemapDefinition.getHeldObject(stored.guid);					
+					stored.gameObject = (GameObject)EditorGUILayout.ObjectField((GameObject)identified.gameObject, typeof(GameObject), true, GUILayout.Width(width));
+					return stored;
+				}				
 				throw new ArgumentException("Cannot support fields of type " + type.Name);
 			}
 			finally
 			{
 				EditorGUILayout.EndHorizontal();
 			}
+		}
+
+		public static void readonlyField(String label, float labelWidth)
+		{
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.LabelField(label, GUILayout.Width(labelWidth));
+			EditorGUILayout.EndHorizontal();
 		}
 	}
 }

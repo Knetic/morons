@@ -10,8 +10,8 @@ namespace Gridsnap.Morons
 	public class MoronThinker : MonoBehaviour
 	{
 		public MoronGraph logic;
-		public Dictionary<String, System.Object> statemap;
-
+		protected Dictionary<String, System.Object> statemap;
+		
 		protected MoronIONode currentNode;
 
 		public void Start()
@@ -24,6 +24,7 @@ namespace Gridsnap.Morons
 			}
 
 			statemap = logic.createStatemap();
+			statemap["self"] = gameObject;
 			setCurrentNode(logic.createResolvedGraph(this));
 		}
 
@@ -36,6 +37,51 @@ namespace Gridsnap.Morons
 				return;
 			
 			setCurrentNode((MoronIONode)transition.to);
+		}
+
+		public System.Object getStateValue(String key)
+		{
+			IdentifiedGameObject identified;
+			System.Object obj;
+
+			if(!statemap.ContainsKey(key))
+				return null;
+			
+			obj = statemap[key];
+			identified = obj as IdentifiedGameObject;
+
+			if(identified != null)
+				return identified.gameObject;
+			
+			return obj;
+		}
+
+		public void setStateValue(String key, System.Object value)
+		{
+			statemap[key] = value;
+
+			// any nodes in the current neighborhood who read that value should have their statemaps updated.
+			// this includes choices that may be more than just in the immediate vicinity.
+			recurseReadUpdates(currentNode);
+		}
+
+		protected void recurseReadUpdates(MoronIONode node)
+		{
+			MoronChoice choice;
+
+			node.updateReadFields();
+			
+			foreach(GraphEdge edge in node.edges)
+			{
+				choice = edge.to as MoronChoice;
+				if(choice != null)
+				{
+					recurseReadUpdates(choice);
+					continue;
+				}
+
+				((MoronIONode)edge.to).updateReadFields();
+			}
 		}
 
 		public MoronIONode getCurrentNode()

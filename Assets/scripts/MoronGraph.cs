@@ -34,6 +34,7 @@ namespace Gridsnap.Morons
 			Dictionary<String, System.Object> statemap;
 
 			statemap = new Dictionary<String, System.Object>();
+			statemapDefinition.resolveFields();
 
 			foreach(StatemapField field in statemapDefinition.getDefinitions())
 				statemap.Add(field.name, field.value);
